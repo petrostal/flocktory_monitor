@@ -27,6 +27,7 @@ DATA_FILE = os.getcwd() + '/sites'
 
 TG_ADMIN_GROUP = os.getenv('TG_ADMIN_GROUP')
 TG_TOKEN = os.getenv('TG_TOKEN')
+ROCKET_CHAT_WEBHOOK_URL = os.getenv('ROCKET_CHAT_WEBHOOK_URL')
 
 FLOCKTORY_URL = os.getenv('FLOCKTORY_URL')
 FLOCKTORY_AUTH_URL = os.getenv('FLOCKTORY_AUTH_URL')
@@ -75,13 +76,30 @@ def print_sites(title: str, sites: set) -> None:
         print(f'  {site}')
 
 
-def notify_admins(message: str) -> None:
+def notify_telegram(message: str) -> None:
+    if not TG_TOKEN or not TG_ADMIN_GROUP:
+        return
     url = (
         f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage?'
         f'chat_id={TG_ADMIN_GROUP}&text={message}'
         f'&parse_mode=markdownv2'
     )
-    requests.get(url)
+    requests.get(url, timeout=30)
+
+
+def notify_rocket_chat(message: str) -> None:
+    if not ROCKET_CHAT_WEBHOOK_URL:
+        return
+    requests.post(
+        ROCKET_CHAT_WEBHOOK_URL,
+        json={'text': message},
+        timeout=30,
+    )
+
+
+def notify_admins(message: str) -> None:
+    notify_telegram(message)
+    notify_rocket_chat(message)
 
 
 def init_web_driver() -> webdriver:
