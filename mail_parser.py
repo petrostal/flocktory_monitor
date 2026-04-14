@@ -1,9 +1,8 @@
-import base64
 import email
 import email.header
 import email.message
+import re
 import imaplib
-import os
 import sys
 from time import sleep
 
@@ -30,11 +29,10 @@ class MailParser:
             sys.exit('Connection error')
 
     def _get_last_uid(self, result=None):
-        if not os.path.exists(self.UID_FILE):
-            return 1 if result is None else int(result[1][0])
-        with open(self.UID_FILE, 'r', encoding='utf-8') as f:
-            last_uid = f.read()
-        return 1 if not last_uid else last_uid
+        result, messages = self.imap.uid('search', None, 'ALL')
+        self._check_connection((result, messages))
+        message_list = messages[0].split()
+        return int(message_list[-1]) if message_list else 0
 
     def _save_last_uid(self):
         with open(self.UID_FILE, 'w', encoding='utf-8') as f:
@@ -46,19 +44,28 @@ class MailParser:
         msg: email.message.Message = email_content
         search_string: str = ''
         for part in msg.walk():
+            if part.get_content_maintype() != 'text':
+                continue
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+            charset = part.get_content_charset() or 'utf-8'
             try:
-                search_string += base64.b64decode(part.get_payload()).decode()
-            except Exception:
-                pass
-        try:
-            return (
-                search_string.split('Ваш код для входа в кабинет Flocktory')[1]
-                .split('<b>')[1]
-                .split('</b>')[0]
-                .strip()
-            )
-        except Exception:
-            return ''
+                search_string += payload.decode(charset, errors='ignore')
+            except LookupError:
+                search_string += payload.decode('utf-8', errors='ignore')
+
+        search_string = re.sub(r'<[^>]+>', ' ', search_string)
+        search_string = re.sub(r'\s+', ' ', search_string)
+        match = re.search(
+            r'Ваш код для входа в кабинет Flocktory\D+(\d+)',
+            search_string,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1)
+        match = re.search(r'\b(\d{4,8})\b', search_string)
+        return match.group(1) if match else ''
 
     def check_last_mail(
         self, sleep_interval: int = 5, max_checks: int = 0
@@ -69,7 +76,7 @@ class MailParser:
             i += 1
             if max_checks > 0 and i == max_checks:
                 break
-            messages = self.imap.uid('search', '1:*')
+            messages = self.imap.uid('search', None, 'ALL')
             code = self._parse_for_code(messages)
             if code:
                 break
@@ -85,6 +92,8 @@ class MailParser:
         message_list.reverse()
 
         for message_id in message_list:
+            if int(message_id) <= int(self._last_uid):
+                continue
             print(message_id)
             result, data = self.imap.uid('fetch', message_id, '(RFC822)')
             email_content = email.message_from_bytes(data[0][1])
@@ -99,4 +108,8 @@ class MailParser:
             if email_subject and (
                 'flocktory authentification code' in email_subject.lower()
             ):
-                return self._get_code_from_email(email_content)
+                code = self._get_code_from_email(email_content)
+                if code:
+                    self._last_uid = int(message_id)
+                    self._save_last_uid()
+                    return code
