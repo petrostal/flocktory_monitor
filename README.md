@@ -40,6 +40,10 @@ TG_TOKEN=<Токен бота в Телеграмм>
 
 ROCKET_CHAT_WEBHOOK_URL=<URL входящего вебхука Rocket.Chat, если нужно дублировать уведомления>
 
+TELEGRAM_MAX_MESSAGE_LENGTH=<1000 - лимит длины одной части сообщения Telegram>
+
+ROCKET_CHAT_MAX_MESSAGE_LENGTH=<1000 - лимит длины одной части сообщения Rocket.Chat>
+
 FLOCKTORY_AUTH_URL=<ссылка, которая редиректит на форму авторизации Flocktory>
 
 FLOCKTORY_URL=https://cabinet.flocktory.com/sites/<XXXX - заменить на свой цифровой код из ссылки на список партнёров>/partner/blacklist/

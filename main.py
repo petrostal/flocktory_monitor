@@ -28,6 +28,12 @@ DATA_FILE = os.getcwd() + '/sites'
 TG_ADMIN_GROUP = os.getenv('TG_ADMIN_GROUP')
 TG_TOKEN = os.getenv('TG_TOKEN')
 ROCKET_CHAT_WEBHOOK_URL = os.getenv('ROCKET_CHAT_WEBHOOK_URL')
+TELEGRAM_MAX_MESSAGE_LENGTH = int(
+    os.getenv('TELEGRAM_MAX_MESSAGE_LENGTH', 1000)
+)
+ROCKET_CHAT_MAX_MESSAGE_LENGTH = int(
+    os.getenv('ROCKET_CHAT_MAX_MESSAGE_LENGTH', 1000)
+)
 
 FLOCKTORY_URL = os.getenv('FLOCKTORY_URL')
 FLOCKTORY_AUTH_URL = os.getenv('FLOCKTORY_AUTH_URL')
@@ -35,6 +41,7 @@ CODE_INPUT_SELECTOR = (
     'input[name="smsCode"], input[name="code"], '
     'input[name="otp"], input[name="verificationCode"]'
 )
+MESSAGE_PART_PREFIX_LENGTH = 16
 
 
 def prepare_imap() -> MailParser:
@@ -76,33 +83,97 @@ def print_sites(title: str, sites: set) -> None:
         print(f'  {site}')
 
 
+def split_message(message: str, max_length: int) -> list[str]:
+    payload_limit = max_length - MESSAGE_PART_PREFIX_LENGTH
+    if payload_limit <= 0:
+        raise ValueError('Message length limit is too small')
+
+    chunks: list[str] = []
+    current = ''
+    for line in message.splitlines():
+        line = line.rstrip()
+        while len(line) > payload_limit:
+            if current:
+                chunks.append(current)
+                current = ''
+            chunks.append(line[:payload_limit])
+            line = line[payload_limit:]
+
+        next_current = line if not current else f'{current}\n{line}'
+        if len(next_current) > payload_limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = next_current
+
+    if current:
+        chunks.append(current)
+
+    if not chunks:
+        chunks = ['']
+    if len(chunks) == 1:
+        return chunks
+    return [
+        f'[{index}/{len(chunks)}]\n{chunk}'
+        for index, chunk in enumerate(chunks, start=1)
+    ]
+
+
+def format_changes(title: str, changes: list[str]) -> list[str]:
+    lines = [f'{title}: {len(changes)}']
+    for change in changes:
+        lines.append(f'- {change}')
+    return lines
+
+
+def build_change_notification(added: list[str], removed: list[str]) -> str:
+    lines = ['Список сайтов изменился']
+    lines.extend(format_changes('Добавлено', added))
+    lines.extend(format_changes('Удалено', removed))
+    return '\n'.join(lines)
+
+
 def notify_telegram(message: str) -> None:
     if not TG_TOKEN or not TG_ADMIN_GROUP:
         print('Telegram notification skipped: TG_TOKEN or TG_ADMIN_GROUP is empty')
         return
-    url = (
-        f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage?'
-        f'chat_id={TG_ADMIN_GROUP}&text={message}'
-        f'&parse_mode=markdownv2'
-    )
-    response = requests.get(url, timeout=30)
-    print(f'Telegram notification status: {response.status_code}')
-    if not response.ok:
-        print(f'Telegram notification response: {response.text[:500]}')
+    chunks = split_message(message, TELEGRAM_MAX_MESSAGE_LENGTH)
+    for index, chunk in enumerate(chunks, start=1):
+        response = requests.post(
+            f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
+            data={
+                'chat_id': TG_ADMIN_GROUP,
+                'text': chunk,
+            },
+            timeout=30,
+        )
+        print(
+            'Telegram notification '
+            f'{index}/{len(chunks)} status: {response.status_code}'
+        )
+        if not response.ok:
+            print(f'Telegram notification response: {response.text[:500]}')
+        sleep(0.2)
 
 
 def notify_rocket_chat(message: str) -> None:
     if not ROCKET_CHAT_WEBHOOK_URL:
         print('Rocket.Chat notification skipped: ROCKET_CHAT_WEBHOOK_URL is empty')
         return
-    response = requests.post(
-        ROCKET_CHAT_WEBHOOK_URL,
-        json={'text': message},
-        timeout=30,
-    )
-    print(f'Rocket.Chat notification status: {response.status_code}')
-    if not response.ok:
-        print(f'Rocket.Chat notification response: {response.text[:500]}')
+    chunks = split_message(message, ROCKET_CHAT_MAX_MESSAGE_LENGTH)
+    for index, chunk in enumerate(chunks, start=1):
+        response = requests.post(
+            ROCKET_CHAT_WEBHOOK_URL,
+            json={'text': chunk},
+            timeout=30,
+        )
+        print(
+            'Rocket.Chat notification '
+            f'{index}/{len(chunks)} status: {response.status_code}'
+        )
+        if not response.ok:
+            print(f'Rocket.Chat notification response: {response.text[:500]}')
+        sleep(0.2)
 
 
 def notify_admins(message: str) -> None:
@@ -214,18 +285,13 @@ def main():
         print_sites('Старый список сайтов:', prev_sites)
         print_sites('Новый список сайтов:', sitenames)
         if prev_sites != sitenames:
-            changes_set: set = prev_sites ^ sitenames
-            changes: str = ''
-            for change in changes_set:
-                if change in sitenames:
-                    changes += f'добавился {change}, '
-                else:
-                    changes += f'удалился {change}, '
-            changes.rstrip(', ')
-            notify_admins(
-                'Список сайтов изменился, добавился или удалился '
-                f'сайт c ID {changes}'
+            added = sorted(sitenames - prev_sites)
+            removed = sorted(prev_sites - sitenames)
+            changes = ', '.join(
+                [f'добавился {change}' for change in added]
+                + [f'удалился {change}' for change in removed]
             )
+            notify_admins(build_change_notification(added, removed))
             print('Список сайтов изменился, ' f'{changes}')
         else:
             notify_admins('Список сайтов не изменился')
