@@ -78,28 +78,39 @@ def print_sites(title: str, sites: set) -> None:
 
 def notify_telegram(message: str) -> None:
     if not TG_TOKEN or not TG_ADMIN_GROUP:
+        print('Telegram notification skipped: TG_TOKEN or TG_ADMIN_GROUP is empty')
         return
     url = (
         f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage?'
         f'chat_id={TG_ADMIN_GROUP}&text={message}'
         f'&parse_mode=markdownv2'
     )
-    requests.get(url, timeout=30)
+    response = requests.get(url, timeout=30)
+    print(f'Telegram notification status: {response.status_code}')
+    if not response.ok:
+        print(f'Telegram notification response: {response.text[:500]}')
 
 
 def notify_rocket_chat(message: str) -> None:
     if not ROCKET_CHAT_WEBHOOK_URL:
+        print('Rocket.Chat notification skipped: ROCKET_CHAT_WEBHOOK_URL is empty')
         return
-    requests.post(
+    response = requests.post(
         ROCKET_CHAT_WEBHOOK_URL,
         json={'text': message},
         timeout=30,
     )
+    print(f'Rocket.Chat notification status: {response.status_code}')
+    if not response.ok:
+        print(f'Rocket.Chat notification response: {response.text[:500]}')
 
 
 def notify_admins(message: str) -> None:
-    notify_telegram(message)
-    notify_rocket_chat(message)
+    for notifier in (notify_telegram, notify_rocket_chat):
+        try:
+            notifier(message)
+        except requests.RequestException as e:
+            print(f'{notifier.__name__} failed: {e}')
 
 
 def init_web_driver() -> webdriver:
